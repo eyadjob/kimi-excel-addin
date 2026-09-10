@@ -130,7 +130,6 @@ function askKimi() {
     var body = {
       model: model,
       messages: buildMessages(contextText),
-      temperature: 0.3
     };
     // kimi-k3 defaults to "max" reasoning, which can take minutes; keep the pane snappy
     if (model === 'kimi-k3') { body.reasoning_effort = 'low'; }
