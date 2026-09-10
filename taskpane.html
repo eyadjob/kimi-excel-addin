@@ -113,9 +113,15 @@ function askKimi() {
     ];
   };
 
-  var contextPromise = document.getElementById('useSelection').checked
-    ? getSelectionText()
-    : Promise.resolve('');
+  var contextPromise;
+  try {
+    var inExcel = (typeof Office !== 'undefined' && Office.context && Office.context.host);
+    contextPromise = (document.getElementById('useSelection').checked && inExcel)
+      ? getSelectionText()
+      : Promise.resolve('');
+  } catch (e) {
+    contextPromise = Promise.resolve('');
+  }
 
   var controller = new AbortController();
   var timeout = setTimeout(function() { controller.abort(); }, 120000);
