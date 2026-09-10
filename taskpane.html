@@ -99,7 +99,11 @@ function askKimi() {
   localStorage.setItem('kimi_api_key', key);
 
   btn.disabled = true;
-  setStatus('Thinking...');
+  var startedAt = Date.now();
+  setStatus('Thinking... (0s)');
+  var ticker = setInterval(function() {
+    setStatus('Thinking... (' + Math.round((Date.now() - startedAt) / 1000) + 's)');
+  }, 1000);
 
   var buildMessages = function(contextText) {
     var userContent = contextText ? contextText + '\n\nRequest: ' + prompt : prompt;
@@ -113,18 +117,25 @@ function askKimi() {
     ? getSelectionText()
     : Promise.resolve('');
 
+  var controller = new AbortController();
+  var timeout = setTimeout(function() { controller.abort(); }, 120000);
+
   contextPromise.then(function(contextText) {
+    var body = {
+      model: model,
+      messages: buildMessages(contextText),
+      temperature: 0.3
+    };
+    // kimi-k3 defaults to "max" reasoning, which can take minutes; keep the pane snappy
+    if (model === 'kimi-k3') { body.reasoning_effort = 'low'; }
     return fetch('https://api.moonshot.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + key
       },
-      body: JSON.stringify({
-        model: model,
-        messages: buildMessages(contextText),
-        temperature: 0.3
-      })
+      body: JSON.stringify(body),
+      signal: controller.signal
     });
   }).then(function(res) {
     if (!res.ok) {
@@ -138,8 +149,14 @@ function askKimi() {
     document.getElementById('insertBtn').style.display = 'block';
     setStatus('Done.');
   }).catch(function(err) {
-    setStatus('Error: ' + err.message + ' — if this is a CORS/network error, see the README troubleshooting section.', true);
+    if (err.name === 'AbortError') {
+      setStatus('Error: request timed out after 120s. Try a shorter request or a different model.', true);
+    } else {
+      setStatus('Error: ' + err.message, true);
+    }
   }).finally(function() {
+    clearInterval(ticker);
+    clearTimeout(timeout);
     btn.disabled = false;
   });
 }
