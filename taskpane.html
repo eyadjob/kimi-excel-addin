@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Kimi AI Assistant</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; margin: 0; padding: 12px; font-size: 13px; color: #222; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  label { display:block; margin: 8px 0 3px; font-weight: 600; }
+  input[type=password], input[type=text], select, textarea {
+    width: 100%; padding: 6px; border: 1px solid #bbb; border-radius: 4px; font-size: 13px;
+  }
+  textarea { resize: vertical; }
+  button {
+    margin-top: 8px; padding: 7px 10px; border: none; border-radius: 4px;
+    background: #111; color: #fff; cursor: pointer; font-size: 13px; width: 100%;
+  }
+  button.secondary { background: #e8e8e8; color: #111; }
+  button:disabled { opacity: .5; cursor: default; }
+  #answer {
+    margin-top: 10px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;
+    background: #fafafa; white-space: pre-wrap; word-break: break-word;
+    max-height: 320px; overflow-y: auto; display: none;
+  }
+  .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  .hint { color: #777; font-size: 11px; margin-top: 4px; }
+  .err { color: #c00; }
+</style>
+</head>
+<body>
+  <h2>Kimi AI Assistant</h2>
+
+  <label for="apiKey">Kimi API Key</label>
+  <input type="password" id="apiKey" placeholder="sk-... from platform.kimi.ai"/>
+  <div class="hint">Stored only in your browser (localStorage). Get a key at platform.kimi.ai &rarr; API Keys.</div>
+
+  <label for="model">Model</label>
+  <select id="model">
+    <option value="kimi-k3" selected>kimi-k3 (recommended)</option>
+    <option value="kimi-k2.6">kimi-k2.6</option>
+    <option value="kimi-k2.7-code-highspeed">kimi-k2.7-code-highspeed</option>
+  </select>
+
+  <label for="prompt">Your request</label>
+  <textarea id="prompt" rows="4" placeholder="e.g. Summarize the selected bugs by assignee"></textarea>
+
+  <div class="row">
+    <input type="checkbox" id="useSelection" checked/>
+    <label for="useSelection" style="margin:0;font-weight:400;">Include selected cells as context</label>
+  </div>
+
+  <button id="sendBtn">Ask Kimi</button>
+
+  <div id="answer"></div>
+
+  <button id="insertBtn" class="secondary" style="display:none;">Insert answer into active cell</button>
+  <div id="status" class="hint"></div>
+
+<script>
+Office.onReady(function() {
+  var keyInput = document.getElementById('apiKey');
+  keyInput.value = localStorage.getItem('kimi_api_key') || '';
+
+  document.getElementById('sendBtn').addEventListener('click', askKimi);
+  document.getElementById('insertBtn').addEventListener('click', insertAnswer);
+});
+
+function setStatus(msg, isErr) {
+  var el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isErr ? 'hint err' : 'hint';
+}
+
+function getSelectionText() {
+  return Excel.run(function(ctx) {
+    var range = ctx.workbook.getSelectedRange();
+    range.load('values, address');
+    return ctx.sync().then(function() {
+      var lines = range.values.map(function(row) {
+        return row.map(function(c) { return c === null ? '' : String(c); }).join('\t');
+      });
+      return 'Selected range ' + range.address + ':\n' + lines.join('\n');
+    });
+  }).catch(function() { return ''; });
+}
+
+function askKimi() {
+  var key = document.getElementById('apiKey').value.trim();
+  var model = document.getElementById('model').value;
+  var prompt = document.getElementById('prompt').value.trim();
+  var answerBox = document.getElementById('answer');
+  var btn = document.getElementById('sendBtn');
+
+  if (!key) { setStatus('Please paste your Kimi API key first.', true); return; }
+  if (!prompt) { setStatus('Please type a request.', true); return; }
+  localStorage.setItem('kimi_api_key', key);
+
+  btn.disabled = true;
+  setStatus('Thinking...');
+
+  var buildMessages = function(contextText) {
+    var userContent = contextText ? contextText + '\n\nRequest: ' + prompt : prompt;
+    return [
+      { role: 'system', content: 'You are Kimi, an AI assistant by Moonshot AI, embedded in Microsoft Excel. Be concise. When the user shares spreadsheet data, answer based on it.' },
+      { role: 'user', content: userContent }
+    ];
+  };
+
+  var contextPromise = document.getElementById('useSelection').checked
+    ? getSelectionText()
+    : Promise.resolve('');
+
+  contextPromise.then(function(contextText) {
+    return fetch('https://api.moonshot.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + key
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: buildMessages(contextText),
+        temperature: 0.3
+      })
+    });
+  }).then(function(res) {
+    if (!res.ok) {
+      return res.text().then(function(t) { throw new Error('HTTP ' + res.status + ': ' + t.slice(0, 300)); });
+    }
+    return res.json();
+  }).then(function(data) {
+    var text = data.choices[0].message.content;
+    answerBox.textContent = text;
+    answerBox.style.display = 'block';
+    document.getElementById('insertBtn').style.display = 'block';
+    setStatus('Done.');
+  }).catch(function(err) {
+    setStatus('Error: ' + err.message + ' — if this is a CORS/network error, see the README troubleshooting section.', true);
+  }).finally(function() {
+    btn.disabled = false;
+  });
+}
+
+function insertAnswer() {
+  var text = document.getElementById('answer').textContent;
+  if (!text) return;
+  Excel.run(function(ctx) {
+    var range = ctx.workbook.getSelectedRange();
+    range.load('rowIndex, columnIndex');
+    return ctx.sync().then(function() {
+      var target = ctx.workbook.getActiveWorksheet()
+        .getCell(range.rowIndex, range.columnIndex + range.columnCount ? 0 : 0);
+      // Simply write into the top-left cell of the current selection
+      range.getCell(0, 0).values = [[text]];
+      return ctx.sync();
+    });
+  }).then(function() {
+    setStatus('Inserted into the active cell.');
+  }).catch(function(err) {
+    setStatus('Insert failed: ' + err.message, true);
+  });
+}
+</script>
+</body>
+</html>
